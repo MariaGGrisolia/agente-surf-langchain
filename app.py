@@ -342,7 +342,12 @@ def ler_chave(nome):
     return v.strip() if isinstance(v, str) else v
 
 GROQ_API_KEY = ler_chave("GROQ_API_KEY")
-MODO_DEMO = not (GROQ_API_KEY or "").startswith("gsk_")
+OPENAI_API_KEY = ler_chave("OPENAI_API_KEY")
+
+# Provedor: usa a OpenAI se houver chave, senao cai no Groq.
+# Os dois falam o mesmo protocolo, entao o restante do codigo nao muda.
+USAR_OPENAI = (OPENAI_API_KEY or "").startswith("sk-")
+MODO_DEMO = not (USAR_OPENAI or (GROQ_API_KEY or "").startswith("gsk_"))
 
 def _garantir_dependencias():
     """Instala as bibliotecas do agente se faltarem, usando o mesmo interpretador
@@ -370,21 +375,25 @@ def _tem_modulo(nome):
 
 
 @st.cache_resource(show_spinner="Preparando o agente...")
-def montar_agente(api_key):
+def montar_agente(_chave_groq, _chave_openai):
     _garantir_dependencias()
     from langchain_openai import ChatOpenAI
     from langchain_core.tools import tool
     from langchain.agents import create_agent
     from langgraph.checkpoint.memory import MemorySaver
 
-    modelos = requests.get("https://api.groq.com/openai/v1/models",
-                           headers={"Authorization": f"Bearer {api_key}"}, timeout=20)
-    ids = [m["id"] for m in modelos.json().get("data", [])]
-    modelo = next((m for m in ["openai/gpt-oss-120b", "openai/gpt-oss-20b",
-                               "qwen/qwen3.6-27b"] if m in ids), ids[0])
-
-    llm = ChatOpenAI(model=modelo, base_url="https://api.groq.com/openai/v1",
-                     api_key=api_key, temperature=0.2, timeout=60, max_retries=2)
+    if _chave_openai and _chave_openai.startswith("sk-"):
+        modelo = "gpt-4o-mini"
+        llm = ChatOpenAI(model=modelo, api_key=_chave_openai,
+                         temperature=0.2, timeout=60, max_retries=2)
+    else:
+        modelos = requests.get("https://api.groq.com/openai/v1/models",
+                               headers={"Authorization": f"Bearer {_chave_groq}"}, timeout=20)
+        ids = [m["id"] for m in modelos.json().get("data", [])]
+        modelo = next((m for m in ["openai/gpt-oss-20b", "openai/gpt-oss-120b",
+                                   "qwen/qwen3.6-27b"] if m in ids), ids[0])
+        llm = ChatOpenAI(model=modelo, base_url="https://api.groq.com/openai/v1",
+                         api_key=_chave_groq, temperature=0.2, timeout=60, max_retries=2)
 
     conn = sqlite3.connect(":memory:", check_same_thread=False)
     cur = conn.cursor()
@@ -676,10 +685,10 @@ with esq:
 with dir_:
     st.markdown("### Converse com o agente")
     if MODO_DEMO:
-        st.info("Configure a variável GROQ_API_KEY para ativar o chat.", icon="🔑")
+        st.info("Configure GROQ_API_KEY ou OPENAI_API_KEY para ativar o chat.", icon="🔑")
     else:
         try:
-            agente, modelo, nomes_ferr = montar_agente(GROQ_API_KEY)
+            agente, modelo, nomes_ferr = montar_agente(GROQ_API_KEY, OPENAI_API_KEY)
             st.markdown(f'<p class="legenda">Modelo: {modelo} · '
                         f'{len(nomes_ferr)} ferramentas</p>', unsafe_allow_html=True)
 
